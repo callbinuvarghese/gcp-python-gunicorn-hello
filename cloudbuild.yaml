@@ -1,0 +1,67 @@
+substitutions:
+    _PROJECT_ID: "PROJECT_ID"
+    _GCP_ARTIFACT_REGISTRY: "us-east4-docker.pkg.dev"
+    _GCP_IMAGE_REPO: lcef
+    _IMAGE_NAME: pyhelo
+    _IMAGE_VERSION: latest
+    _GCP_SERVICE_NAME: svc-pyhelo
+    _GCP_REGION: us-east1
+    _SEVERITY: CRITICAL
+steps:
+   - id: build
+     name: gcr.io/cloud-builders/docker
+     entrypoint: /bin/bash
+     args:
+     - -c
+     - |
+       docker build -t $_GCP_ARTIFACT_REGISTRY/$_PROJECT_ID/$_GCP_IMAGE_REPO/$_IMAGE_NAME:$_IMAGE_VERSION -f ./Dockerfile . &&
+       docker image inspect $_GCP_ARTIFACT_REGISTRY/$_PROJECT_ID/$_GCP_IMAGE_REPO/$_IMAGE_NAME:latest --format \
+       '{{index .RepoTags 0}}@{{.Id}}' > /workspace/image-digest.txt &&
+       cat image-digest.txt
+   - id: scan
+     name: gcr.io/google.com/cloudsdktool/cloud-sdk
+     entrypoint: /bin/bash
+     args:
+     - -c
+     - |
+       gcloud artifacts docker images scan $_GCP_ARTIFACT_REGISTRY/$_PROJECT_ID/$_GCP_IMAGE_REPO/$_IMAGE_NAME:$_IMAGE_VERSION \
+       --format='value(response.scan)' > /workspace/scan_id.txt
+   - id: severity check
+     name: gcr.io/google.com/cloudsdktool/cloud-sdk
+     entrypoint: /bin/bash
+     args:
+     - -c
+     - |
+       gcloud artifacts docker images list-vulnerabilities $(cat /workspace/scan_id.txt) \
+       --format='value(vulnerability.effectiveSeverity)'
+       #| if grep -Fxq $_SEVERITY; \
+       #then echo 'Failed vulnerability check' && exit 1; else exit 0; fi
+   - id: push
+     name: gcr.io/cloud-builders/docker
+     entrypoint: /bin/bash
+     args:
+     - -c
+     - |
+       docker push $_GCP_ARTIFACT_REGISTRY/$_PROJECT_ID/$_GCP_IMAGE_REPO/$_IMAGE_NAME:$_IMAGE_VERSION
+   - id: deploy
+     name: gcr.io/cloud-builders/gcloud
+     entrypoint: gcloud
+     args:
+     - run
+     - deploy
+     - '${_GCP_SERVICE_NAME}'
+     - '--platform'
+     - managed
+     - '--region'
+     - '${_GCP_REGION}'
+     - '--allow-unauthenticated'
+     - '--max-instances'
+     - '1' 
+     - '--memory'
+     - '2G'
+#     - '--service-account'
+#     - '${_SERVICE_NAME}@${PROJECT_ID}.iam.gserviceaccount.com'
+     - '--image'
+     - '$_GCP_ARTIFACT_REGISTRY/$_PROJECT_ID/$_GCP_IMAGE_REPO/$_IMAGE_NAME:$_IMAGE_VERSION'
+images: ['$_GCP_ARTIFACT_REGISTRY/$_PROJECT_ID/$_GCP_IMAGE_REPO/$_IMAGE_NAME:$_IMAGE_VERSION']
+
